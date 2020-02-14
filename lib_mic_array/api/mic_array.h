@@ -1,5 +1,4 @@
-// Copyright (c) 2015-2019, XMOS Ltd, All rights reserved
-#if __XC__
+// Copyright (c) 2016, XMOS Ltd, All rights reserved
 #ifndef MIC_ARRAY_H_
 #define MIC_ARRAY_H_
 
@@ -11,9 +10,6 @@
 #ifndef MIC_ARRAY_HIRES_MAX_DELAY
     #define MIC_ARRAY_HIRES_MAX_DELAY 256
 #endif
-
-#define MIC_ARRAY_NO_INTERNAL_CHANS (0)
-
 
 /** PDM Microphone Interface component.
  *
@@ -79,8 +75,8 @@ typedef enum {
  */
 typedef struct {
 
-    unsigned len; /**< If len is less than 16 then this sets the frame size to 2 to the power of len, i.e. A frame will contain 2 to the power of len samples of each channel.
-                                   If len is 16 or greater then the frame size is equal to len. */
+    unsigned frame_size_log2; /**< The output frame size log2, i.e. A frame will contain 2 to the power of frame_size_log2 samples of each channel. */
+
     int apply_dc_offset_removal; /**< Remove the DC offset from the audio before the final decimation. Set to non-zero to enable. */
 
     int index_bit_reversal; /**< If non-zero then bit reverse the index of the elements within the frame. Used in the case of preparing for an FFT.*/
@@ -115,14 +111,7 @@ typedef struct {
 
     unsigned channel_count; /**< The count of enabled channels (0->4).  */
 
-
-    unsigned async_interface_enabled; /** If set to 1, this disables the mic_array_get_next_time_domain_frame interface
-                                        and enables the mic_array_recv_sample interface. **/
-
-
 } mic_array_decimator_config_t;
-
-typedef unsigned mic_array_internal_audio_channels;
 
 /** Four Channel Decimation component.
  *
@@ -136,64 +125,10 @@ typedef unsigned mic_array_internal_audio_channels;
  *  \param c_from_pdm_interface      The channel where the decimated PDM from pdm_rx task will be inputted.
  *  \param c_frame_output            The channel used to transfer data and control information between
  *                                   the client of this task and this task.
- *  \param channels                  A pointer to an array of mic_array_internal_audio_channels. This can be set to
- *                                   MIC_ARRAY_NO_INTERNAL_CHANS if none are requires.
  */
 void mic_array_decimate_to_pcm_4ch(
         streaming chanend c_from_pdm_interface,
-        streaming chanend c_frame_output, mic_array_internal_audio_channels * channels);
-
-/** Far end channel connector.
- *
- *  This function allowed a connection to be established between a signal producer and the microphone
- *  array. The sample rate of the producer and sample rate of the output of the microphone array must
- *  match.
- *
- *  \param internal_channels         An array of mic_array_internal_audio_channels.
- *                                   MIC_ARRAY_NO_INTERNAL_CHANS if none are requires.
- *  \param ch0                       The channel used to send internal audio to mic_array
- *                                   channel 0.
- *  \param ch1                       The channel used to send internal audio to mic_array
- *                                   channel 1.
- *  \param ch2                       The channel used to send internal audio to mic_array
- *                                   channel 2.
- *  \param ch3                       The channel used to send internal audio to mic_array
- *                                   channel 3.
- */
-void mic_array_init_far_end_channels(mic_array_internal_audio_channels internal_channels[4],
-        streaming chanend ?ch0, streaming chanend ?ch1,
-        streaming chanend ?ch2, streaming chanend ?ch3);
-
-/** This sends an audio sample to a decimator.
- *
- *  This function call sets up the four channel decimators. After this has been called there
- *  will be a real time requirement on this task, i.e. this task must call
- *  mic_array_get_next_time_domain_frame() at the output sample rate multiplied by the frame size.
- *
- *  \param c_to_decimator    The channel used to transfer audio sample beterrn the application and
- *                           the decimators.
- *  \param sample            The audio sample to be transfered.
- *  \returns                 0 for success and 1 for failure. Failure may occour when the decimators
- *                           are not yet running.
- *
- */
-int mic_array_send_sample( streaming chanend c_to_decimator, int sample);
-
-/** This receives a pair of audio samples from a decimator. async_interface_enabled
- * must be set in the decimator config for this function to work as intended.
- *
- * If this function isn't called at least at the rate at which the decimator is outputting samples
- * it will cause timing related errors.
- *
- *  \param c_from_decimator  The channel used to transfer audio sample between
- *                           the decimator and the application.
- *  \param ch_a              The first audio sample to be received.
- *  \param ch_b              The second audio sample to be received.
- *  \returns                 0 for success and 1 for failure. Failure may occur when the decimators
- *                           are not yet running or when a new sample isn't ready.
- *
- */
-int mic_array_recv_samples(streaming chanend c_from_decimator, int &ch_a, int &ch_b);
+        streaming chanend c_frame_output);
 
 
 /** Four Channel Decimation initializer for raw audio frames.
@@ -222,13 +157,6 @@ void mic_array_init_time_domain_frame(
  *  This function handles the frame exchange between the mic_array_decimate_to_pcm_4ch() tasks and the
  *  application. It returns a pointer to the most recently written frame. After this point the oldest
  *  frame is assumed out of scope to the application.
- *  Current behaviour: this function must be called before the decimators have produced the full frame
- *  and are ready for exachange. If this function is not called in time then the PDM data will be dropped
- *  until the frame is accepted from the decimators. Failure to meet timing can be detected by enabling
- *  DEBUG_MIC_ARRAY in your makefile with -DDEBUG_MIC_ARRAY.
- *  Future behaviour: if this function is not called before the frame has been produced by the decimators
- *  then the frame is dropped. This can be detected with the frame_counter attached to the metadata of the
- *  frame. Sequential frames will have frame_counters that increament by one.
  *
  *  \param c_from_decimators The channels used to transfer pointers between the application and
  *                           the mic_array_decimate_to_pcm_4ch() tasks.
@@ -268,13 +196,6 @@ void mic_array_init_frequency_domain_frame(streaming chanend c_from_decimators[]
  *  This function handles the frame exchange between the mic_array_decimate_to_pcm_4ch() tasks and the
  *  application. It returns a pointer to the most recently written frame. After this point the oldest
  *  frame is assumed out of scope to the application.
- *  Current behaviour: this function must be called before the decimators have produced the full frame
- *  and are ready for exachange. If this function is not called in time then the PDM data will be dropped
- *  until the frame is accepted from the decimators. Failure to meet timing can be detected by enabling
- *  DEBUG_MIC_ARRAY in your makefile with -DDEBUG_MIC_ARRAY.
- *  Future behaviour: if this function is not called before the frame has been produced by the decimators
- *  then the frame is dropped. This can be detected with the frame_counter attached to the metadata of the
- *  frame. Sequential frames will have frame_counters that increament by one.
  *
  *  \param c_from_decimators   The channels used to transfer pointers between the application and
  *                            the mic_array_decimate_to_pcm_4ch() tasks.
@@ -308,4 +229,3 @@ void mic_array_decimator_configure(
         mic_array_decimator_config_t dc[]);
 
 #endif /* MIC_ARRAY_H_ */
-#endif
